@@ -34,7 +34,8 @@ for el in rooms:
     #setParameterByName(el,'__Piece_Safe Area_Fonction', 'ninjaGo')
    # str= area.SetValueString('ratatuille')
     #str= el.AsValueString()
-    liste.append(search('Nom',getParameterAsString(el,'Numéro'),la_bonne_liste))
+     liste.append({"item_000":search('Nom',getParameterAsString(el,'Numéro'),la_bonne_liste),"item_1111":getParameterAsString(el,'Numéro')})
+   
    
 
 OUT = liste
