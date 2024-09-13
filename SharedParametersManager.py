@@ -5,16 +5,26 @@ from Autodesk.Revit.DB import *
 # import Revit Services 
 clr.AddReference('RevitServices')
 from RevitServices.Persistence import DocumentManager
-doc = DocumentManager.Instance.CurrentDBDocument
-app = doc.Application
 
 class SharedParametersManager:
+
     doc = DocumentManager.Instance.CurrentDBDocument
     app = doc.Application
-    def createGroupsInSharedParameters(self,name):       
+    #si chemin du fichier est donné il ouvre le fichier et change, sinon il change le fichier ouvert
+    def createGroupsInSharedParameters(self,name,path='null'):       
         originalFile = self.app.SharedParametersFilename
         #app.SharedParametersFilename = tempFile
         sharedParameterFile = self.app.OpenSharedParameterFile()
         #txt group name 
         GroupName = sharedParameterFile.Groups.Create(name)
         return GroupName
+        
+    def createSharedParameterInGroup(self,name):
+        originalFile = self.app.SharedParametersFilename
+        #app.SharedParametersFilename = tempFile
+        sharedParameterFile = self.app.OpenSharedParameterFile()
+        #txt parametres name 
+        return 
+    
+    def addParameterToPoject(self,name,file,groupe):
+    def createFileSharedParameters(self,path,):
