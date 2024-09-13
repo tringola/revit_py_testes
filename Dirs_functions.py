@@ -71,3 +71,10 @@ def getTreeDirsFromRoot(root):
     indent = ' ' * root.count(os.sep) 
     tree += f'{indent}-{os.path.basename(root)}\n'
 
+def csvToDict(file_path):
+	list = []
+	with open(file_path) as csvfile:
+		reader = csv.DictReader(csvfile,delimiter=';')
+		for row in reader:       
+			list.append(row)
+	return list
