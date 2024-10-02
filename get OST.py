@@ -7,6 +7,7 @@ __version__ = '1.0.0'
 
 import clr
 import System
+import json
 # Import ToDSType(bool) extension method
 clr.AddReference("RevitNodes")
 import Revit
@@ -42,20 +43,20 @@ catname = IN[0]
 bic = System.Enum.GetValues(BuiltInCategory) 
 cats, bics = [], []
 ost = ""
-
+cat = []
 for i in bic:
     try:
         categorie = {}
-        cat = Revit.Elements.Category.GetCategory(ElementId(i))
+        cat = Revit.Elements.Category.ById(ElementId(i).IntegerValue)
         categorie["name"] = cat.Name
-        categorie["OST"] = i
-        categorie['en_name']=ElementId(i)
+        categorie["OST"] = i.ToString()
+        categorie['en_name']=ElementId(i).ToString()
         categorie['dwg_correspondance']=""
         categorie['ifc_correspondance']=""
         categorie['dgn_correspondance']=""
         categorie['type_categorie']=""
 
-        #cats.append(cat)
+        cats.append(cat)
         bics.append(categorie)
     except:
         pass
@@ -63,6 +64,6 @@ for i in bic:
 for i, b in zip(cats, bics):
     if catname == str(i): 
         ost = b 
- 
-OUT = bics
+r = json.dumps(bics, indent=2, ensure_ascii=False)
+OUT =  r
 
