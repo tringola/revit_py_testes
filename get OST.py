@@ -44,11 +44,20 @@ bic = System.Enum.GetValues(BuiltInCategory)
 cats, bics = [], []
 ost = ""
 cat = []
+arr_name = []
 for i in bic:
     try:
         categorie = {}
         cat = Revit.Elements.Category.ById(ElementId(i).IntegerValue)
-        categorie["name"] = cat.Name
+        arr_name = cat.Name.Split("-")
+        if len(arr_name) > 1 :
+            #remove dernier space vide (avant tiret)
+        	categorie["main_category"] = arr_name[0][:-1]
+        	#remove premier space vide (après tiret)
+        	categorie["name"] = arr_name[1][1:]
+        else :
+        	categorie["name"] = cat.Name
+        	
         categorie["OST"] = i.ToString()
         categorie['en_name']=ElementId(i).ToString()
         categorie['dwg_correspondance']=""
