@@ -1,0 +1,54 @@
+import json
+import clr
+
+
+# Import DocumentManager and TransactionManager
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+# import Revit API
+clr.AddReference('RevitAPI')
+from Autodesk.Revit.DB import *
+# Imports Ilists module into python
+clr.AddReference("System")
+# Chemin vers votre fichier JSON
+json_file_path = r"C:\Users\23o\Desktop\gab_vue.json"
+
+# Charger le fichier JSON
+with open(json_file_path, 'r') as file:
+    data = json.load(file)
+
+# Accéder à l'élément du gabarit de vue
+view_template = data["viewTemplate"]
+
+# Standard areas for Current Document, Active UI and application
+doc = DocumentManager.Instance.CurrentDBDocument
+uiapp = DocumentManager.Instance.CurrentUIApplication
+app = uiapp.Application
+uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
+
+
+# Ne pas oublier de sauvegarder les changements
+TransactionManager.Instance.EnsureInTransaction(doc)
+
+# Exemple de création d'un gabarit de vue
+new_view_template =  View.CreateViewTemplate(uidoc.ActiveView)
+cat_list = []
+# Configurer la visibilité des catégories
+for category_name, is_visible in view_template["visibility"].items():
+    category = doc.Settings.Categories.GetCategory(category_name)
+    if category:
+        new_view_template.SetCategoryHidden(category.Id, not is_visible)
+        cat_list.append(category.Name)
+# Configurer l'échelle
+new_view_template.Scale = view_template["scale"]
+
+# Configurer les annotations
+annotations = view_template["annotations"]
+# Exemple pour les tailles de texte et les poids de ligne, selon vos besoins
+
+# Ajoutez d'autres configurations ici
+TransactionManager.Instance.TransactionTaskDone()
+
+OUT = cat_list
