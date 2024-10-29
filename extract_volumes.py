@@ -1,4 +1,5 @@
 import clr
+import logging
 clr.AddReference('RevitAPI')
 clr.AddReference('RevitAPIUI')
 from Autodesk.Revit.DB import *
@@ -130,5 +131,20 @@ if len(resultado) > 0:
 else:
     result = None
     print("Aucun élément sélectionné")
+    
+def log():
+	logging.basicConfig(filename="F:\\document\\23o_desktop\\Marvio_Revit_models\\std.log",format='%(asctime)s %(message)s',filemode='w')
+	#Let us Create an object
+	logger=logging.getLogger()
+	#Now we are going to Set the threshold of logger to DEBUG
+	logger.setLevel(logging.DEBUG)
+	#some messages to test
+	logger.debug("This is just a harmless debug message")
+	logger.info("This is just an information for you")
+	logger.warning("OOPS!!!Its a Warning")
+	logger.error("Have you try to divide a number by zero")
+	logger.critical("The Internet is not working....")
+
+log()
 
 OUT = result
