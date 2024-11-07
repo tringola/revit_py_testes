@@ -4,7 +4,7 @@ import clr
 clr.AddReference("RevitNodes")
 import Revit
 clr.ImportExtensions(Revit.Elements)
-
+#ça a changé
 # Import geometry conversion extension methods
 clr.ImportExtensions(Revit.GeometryConversion)
 
