@@ -2,6 +2,10 @@
 TransactionManager.Instance.TransactionTaskDone()
 # Input and unwrapping 
 #input = UnwrapElement(IN[0])
+def getProjectElements(OST):
+    FilteredElements = FilteredElementCollector(doc) 
+    return FilteredElements.OfCategory(OST)
+
 def getRooms():
     FilteredElements = FilteredElementCollector(doc) 
     return FilteredElements.OfCategory(BuiltInCategory.OST_Rooms)
