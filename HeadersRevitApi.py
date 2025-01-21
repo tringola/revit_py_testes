@@ -44,3 +44,7 @@ doc = DocumentManager.Instance.CurrentDBDocument
 uiapp = DocumentManager.Instance.CurrentUIApplication
 app = uiapp.Application
 uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
+
+#path is r"X:\dir\etc..."
+def require_once(path):
+    sys.path.append(os.path.abspath(path))
