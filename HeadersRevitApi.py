@@ -38,4 +38,9 @@ from Autodesk.Revit import Creation
 
 # Imports Ilists module into python
 clr.AddReference("System")
-from System.Collections.Generic import List as cList
+
+# Standard areas for Current Document, Active UI and application
+doc = DocumentManager.Instance.CurrentDBDocument
+uiapp = DocumentManager.Instance.CurrentUIApplication
+app = uiapp.Application
+uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
