@@ -1,4 +1,6 @@
 import clr
+import sys
+import os
 # import Revit API
 clr.AddReference('RevitAPI')
 from Autodesk.Revit.DB import *
@@ -34,7 +36,11 @@ class SharedParametersManager:
     
     def addParameterToProject(self,name,file,groupe):
     
-    def createFileSharedParameters(self,path,):
+    #path is the path of dir and name of file .txt
+    def createFileSharedParameters(self,path):
+        f = open(path, "r")
+        f.close()
+        
     
     def getAllElementsOfCategory(self,Category):#il faut etre dans la forme BuiltInCategory.OST_Rooms par exemple
     FilteredElements = FilteredElementCollector(doc) 
