@@ -1,0 +1,236 @@
+'''
+Python Templates - Revit Basic Imports
+'''
+__author__ = 'Da Rosa Freire'
+__version__ = '0.1.0'
+
+import clr
+# import System
+import System
+from System.Collections.Generic import *
+import csv
+import json
+import os
+
+# Import ToDSType(bool) extension method
+clr.AddReference("RevitNodes")
+import Revit
+clr.ImportExtensions(Revit.Elements)
+
+# Import geometry conversion extension methods
+clr.ImportExtensions(Revit.GeometryConversion)
+
+# Import DocumentManager and TransactionManager
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+
+# Import RevitAPI
+clr.AddReference("RevitAPI")
+import Autodesk
+from Autodesk.Revit.DB import *
+
+# import Revit API User Interface UI
+clr.AddReference('RevitAPIUI')
+from Autodesk.Revit.UI import *
+from Autodesk.Revit import Creation
+
+# Imports Ilists module into python
+clr.AddReference("System")
+
+# Standard areas for Current Document, Active UI and application
+doc = DocumentManager.Instance.CurrentDBDocument
+uiapp = DocumentManager.Instance.CurrentUIApplication
+app = uiapp.Application
+uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
+
+#path is r"X:\dir\etc..."
+def require_once(path):
+    sys.path.append(os.path.abspath(path))
+
+
+def get_demolished_solid(fi):
+    """
+    Obtient le solide d'une porte/fenêtre démolie
+    """
+    solid_opening = None
+    
+    try:
+        # Démarrer une transaction
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        
+        # Vérifier si l'élément a des phases et si elles sont modifiables
+        if fi.HasPhases() and fi.ArePhasesModifiable():
+            # Modifier la phase de démolition
+            original_phase_id = fi.DemolishedPhaseId
+            fi.DemolishedPhaseId = fi.CreatedPhaseId
+            doc.Regenerate()
+            
+            # Obtenir les éléments dépendants
+            dependents = fi.GetDependentElements(None)
+            
+            # Parcourir les éléments dépendants
+            for id in dependents:
+                e = doc.GetElement(id)
+                if isinstance(e, Wall):
+                    # Obtenir la géométrie du mur
+                    geom_wall = e.get_Geometry(Options())
+                    
+                    # Cloner le solide
+                    for geom in geom_wall:
+                        if isinstance(geom, Solid) and geom.Volume > 0:
+                            solid_opening = SolidUtils.Clone(geom)
+                            print(f"Solide trouvé pour {fi.Id}")
+                            break
+                    break
+            
+            # Restaurer l'état original
+            fi.DemolishedPhaseId = original_phase_id
+            doc.Regenerate()
+        
+        # Terminer la transaction
+        TransactionManager.Instance.TransactionTaskDone()
+    
+    except Exception as e:
+        print(f"Erreur dans get_demolished_solid pour {fi.Id}: {str(e)}")
+        # Assurer que la transaction est terminée en cas d'erreur
+        try:
+            TransactionManager.Instance.TransactionTaskDone()
+        except:
+            pass
+    
+    return solid_opening
+
+def create_opening_from_solid(fi, solid, host):
+    """
+    Crée une ouverture à partir d'un solide
+    """
+    try:
+        # Démarrer une transaction
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        
+        # Obtenir la boîte englobante du solide
+        bb = solid.GetBoundingBox()
+        min_pt = bb.Min
+        max_pt = bb.Max
+        
+        print(f"Boîte englobante: Min={min_pt.X},{min_pt.Y},{min_pt.Z} Max={max_pt.X},{max_pt.Y},{max_pt.Z}")
+        
+        # Créer l'ouverture selon le type d'hôte
+        opening = None
+        
+        if isinstance(host, Wall):
+            print("Création d'ouverture de mur")
+            
+            # Pour un mur, nous utilisons la surcharge (Wall, XYZ, XYZ)
+            try:
+                # Transformer les points dans le système de coordonnées global
+                transform = fi.GetTotalTransform()
+                min_point_global = transform.OfPoint(min_pt)
+                max_point_global = transform.OfPoint(max_pt)
+                
+                print(f"Points globaux: Min={min_point_global.X},{min_point_global.Y},{min_point_global.Z} Max={max_point_global.X},{max_point_global.Y},{max_point_global.Z}")
+                
+                # Créer une ouverture rectangulaire dans le mur
+                opening = doc.Create.NewOpening(host, min_point_global, max_point_global)
+                print(f"Ouverture de mur créée pour {fi.Id}")
+            except Exception as e:
+                print(f"Erreur lors de la création d'ouverture de mur: {str(e)}")
+        
+        elif isinstance(host, RoofBase) or isinstance(host, Floor) or isinstance(host, Ceiling):
+            print("Création d'ouverture de toit/plancher/plafond")
+            
+            # Pour un toit, plancher ou plafond, nous utilisons la surcharge (Element, CurveArray, Boolean)
+            try:
+                # Créer un CurveArray (différent de CurveLoop)
+                curve_array = CurveArray()
+                
+                # Créer les courbes pour un rectangle
+                pt1 = XYZ(min_pt.X, min_pt.Y, min_pt.Z)
+                pt2 = XYZ(max_pt.X, min_pt.Y, min_pt.Z)
+                pt3 = XYZ(max_pt.X, max_pt.Y, min_pt.Z)
+                pt4 = XYZ(min_pt.X, max_pt.Y, min_pt.Z)
+                
+                # Transformer les points dans le système de coordonnées global
+                transform = fi.GetTotalTransform()
+                pt1_global = transform.OfPoint(pt1)
+                pt2_global = transform.OfPoint(pt2)
+                pt3_global = transform.OfPoint(pt3)
+                pt4_global = transform.OfPoint(pt4)
+                
+                # Ajouter les lignes au CurveArray
+                curve_array.Append(Line.CreateBound(pt1_global, pt2_global))
+                curve_array.Append(Line.CreateBound(pt2_global, pt3_global))
+                curve_array.Append(Line.CreateBound(pt3_global, pt4_global))
+                curve_array.Append(Line.CreateBound(pt4_global, pt1_global))
+                
+                # Créer l'ouverture (cutVoid = True)
+                opening = doc.Create.NewOpening(host, curve_array, True)
+                print(f"Ouverture de toit/plancher créée pour {fi.Id}")
+            except Exception as e:
+                print(f"Erreur lors de la création d'ouverture de toit/plancher: {str(e)}")
+        
+        else:
+            print(f"Type d'hôte non pris en charge: {type(host).__name__}")
+        
+        # Terminer la transaction
+        TransactionManager.Instance.TransactionTaskDone()
+        return opening
+        
+    except Exception as e:
+        print(f"Erreur globale dans create_opening_from_solid: {str(e)}")
+        try:
+            TransactionManager.Instance.TransactionTaskDone()
+        except:
+            pass
+        return None
+
+# Fonction pour obtenir toutes les portes et fenêtres
+def get_all_doors_and_windows():
+    try:
+        # Créer des collecteurs pour portes et fenêtres
+        door_collector = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Doors).WhereElementIsNotElementType()
+        window_collector = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Windows).WhereElementIsNotElementType()
+        
+        # Combiner les résultats
+        all_elements = list(door_collector) + list(window_collector)
+        
+        # Filtrer pour ne garder que les FamilyInstance
+        family_instances = [elem for elem in all_elements if isinstance(elem, FamilyInstance)]
+        
+        print(f"Nombre d'éléments trouvés: {len(family_instances)}")
+        return family_instances
+    except Exception as e:
+        print(f"Erreur lors de la collecte des portes et fenêtres: {str(e)}")
+        return []
+
+# Obtenir toutes les portes et fenêtres
+doors_and_windows = get_all_doors_and_windows()
+
+# Test avec le premier élément pour le débogage
+if doors_and_windows and len(doors_and_windows) > 0:
+    try:
+        test_element = doors_and_windows[0]
+        print(f"Test avec l'élément: {test_element.Id}")
+        
+        # Obtenir l'hôte
+        host = test_element.Host
+        print(f"Hôte trouvé: {host.Id}, Type: {type(host).__name__}")
+        
+        # Obtenir le solide
+        solid = get_demolished_solid(test_element)
+        
+        # Créer l'ouverture si le solide est valide
+        opening = None
+        if solid is not None:
+            opening = create_opening_from_solid(test_element, solid, host)
+        
+        # Sortie: solide et ouverture
+        OUT = (solid, opening)
+    except Exception as e:
+        print(f"Erreur lors du test avec le premier élément: {str(e)}")
+        OUT = None
+else:
+    print("Aucune porte ou fenêtre trouvée dans le projet")
+    OUT = None
