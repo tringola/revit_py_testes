@@ -1,0 +1,653 @@
+'''
+Python Templates - Revit Basic Imports
+'''
+__author__ = 'Da Rosa Freire'
+__version__ = '0.1.0'
+
+import clr
+# import System
+import System
+from System.Collections.Generic import *
+import csv
+import json
+import os
+
+# Import ToDSType(bool) extension method
+clr.AddReference("RevitNodes")
+import Revit
+clr.ImportExtensions(Revit.Elements)
+
+# Import geometry conversion extension methods
+clr.ImportExtensions(Revit.GeometryConversion)
+
+# Import DocumentManager and TransactionManager
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+
+# Import RevitAPI
+clr.AddReference("RevitAPI")
+import Autodesk
+from Autodesk.Revit.DB import *
+
+# import Revit API User Interface UI
+clr.AddReference('RevitAPIUI')
+from Autodesk.Revit.UI import *
+from Autodesk.Revit import Creation
+
+# Imports Ilists module into python
+clr.AddReference("System")
+
+# Standard areas for Current Document, Active UI and application
+doc = DocumentManager.Instance.CurrentDBDocument
+uiapp = DocumentManager.Instance.CurrentUIApplication
+app = uiapp.Application
+uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
+
+#path is r"X:\dir\etc..."
+def require_once(path):
+    sys.path.append(os.path.abspath(path))
+
+# Fonctions de conversion d'unités (définies au début du script)
+def convert_internal_to_project_units(value):
+    """
+    Convertit une valeur des unités internes de Revit (pieds) vers les unités du projet (mètres)
+    """
+    # Facteur de conversion de pieds vers mètres
+    feet_to_meters = 0.3048
+    
+    # Convertir la valeur de pieds en mètres
+    return value * feet_to_meters
+
+def convert_project_to_internal_units(value):
+    """
+    Convertit une valeur des unités du projet (mètres) vers les unités internes de Revit (pieds)
+    """
+    # Facteur de conversion de mètres vers pieds
+    meters_to_feet = 1.0 / 0.3048
+    
+    # Convertir la valeur de mètres en pieds
+    return value * meters_to_feet
+
+def get_demolished_solid(fi):
+    """
+    Obtient le solide d'une porte/fenêtre démolie
+    """
+    solid_opening = None
+    
+    try:
+        # Démarrer une transaction
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        
+        # Vérifier si l'élément a des phases et si elles sont modifiables
+        if fi.HasPhases() and fi.ArePhasesModifiable():
+            # Modifier la phase de démolition
+            original_phase_id = fi.DemolishedPhaseId
+            fi.DemolishedPhaseId = fi.CreatedPhaseId
+            doc.Regenerate()
+            
+            # Obtenir les éléments dépendants
+            dependents = fi.GetDependentElements(None)
+            
+            # Parcourir les éléments dépendants
+            for id in dependents:
+                e = doc.GetElement(id)
+                if isinstance(e, Wall) or isinstance(e, RoofBase):
+                    # Obtenir la géométrie du mur ou du toit
+                    geom_host = e.get_Geometry(Options())
+                    
+                    # Cloner le solide
+                    for geom in geom_host:
+                        if isinstance(geom, Solid) and geom.Volume > 0:
+                            solid_opening = SolidUtils.Clone(geom)
+                            print(f"Solide trouvé pour {fi.Id}")
+                            break
+                    break
+            
+            # Restaurer l'état original
+            fi.DemolishedPhaseId = original_phase_id
+            doc.Regenerate()
+        
+        # Terminer la transaction
+        TransactionManager.Instance.TransactionTaskDone()
+    
+    except Exception as e:
+        print(f"Erreur dans get_demolished_solid pour {fi.Id}: {str(e)}")
+        # Assurer que la transaction est terminée en cas d'erreur
+        try:
+            TransactionManager.Instance.TransactionTaskDone()
+        except:
+            pass
+    
+    return solid_opening
+
+def get_element_dimensions(fi):
+    """
+    Obtient les dimensions précises de l'élément à partir des paramètres et de la géométrie
+    """
+    try:
+        # Obtenir le symbole du type de famille
+        symbol = fi.Symbol
+        
+        # Variable pour stocker les informations sur la source des dimensions
+        source_info = {}
+        
+        # Essayer d'obtenir les dimensions à partir de la géométrie d'abord
+        width = None
+        height = None
+        
+        # Si nous pouvons obtenir un solide, priorité à ses dimensions
+        solid = get_demolished_solid(fi)
+        if solid:
+            bb = solid.GetBoundingBox()
+            solid_width = bb.Max.X - bb.Min.X
+            solid_height = bb.Max.Z - bb.Min.Z
+            solid_depth = bb.Max.Y - bb.Min.Y
+            
+            # Convertir en mètres pour l'affichage
+            solid_width_meters = convert_internal_to_project_units(solid_width)
+            solid_height_meters = convert_internal_to_project_units(solid_height)
+            solid_depth_meters = convert_internal_to_project_units(solid_depth)
+            
+            print(f"Dimensions brutes du solide: largeur={solid_width_meters}m, hauteur={solid_height_meters}m, profondeur={solid_depth_meters}m")
+            
+            # Détecter la dimension la plus grande pour la largeur et la hauteur
+            # Généralement, la plus grande dimension horizontale est la largeur, la plus grande verticale est la hauteur
+            horiz_dims = [solid_width_meters, solid_depth_meters]
+            max_horiz_dim = max(horiz_dims)
+            
+            width = max_horiz_dim
+            height = solid_height_meters
+            
+            source_info["width"] = "solide"
+            source_info["height"] = "solide"
+            
+            # Vérifier si les valeurs semblent raisonnables (supérieures à un seuil minimal)
+            if width < 0.1:  # Si moins de 10 cm, probablement incorrect
+                width = None
+            if height < 0.1:  # Si moins de 10 cm, probablement incorrect
+                height = None
+        
+        # Si nous n'avons pas pu obtenir de dimensions valides du solide, essayer les paramètres
+        if width is None or height is None:
+            # Essayer d'obtenir les paramètres de largeur et hauteur du type
+            width_param = symbol.get_Parameter(BuiltInParameter.FAMILY_WIDTH_PARAM)
+            height_param = symbol.get_Parameter(BuiltInParameter.FAMILY_HEIGHT_PARAM)
+            
+            if width is None and width_param and width_param.HasValue:
+                width = width_param.AsDouble()
+                source_info["width"] = "symbole_famille"
+            if height is None and height_param and height_param.HasValue:
+                height = height_param.AsDouble()
+                source_info["height"] = "symbole_famille"
+            
+            # Essayer d'obtenir les paramètres à partir de l'instance
+            if width is None or height is None:
+                width_param_instance = fi.get_Parameter(BuiltInParameter.FAMILY_WIDTH_PARAM)
+                height_param_instance = fi.get_Parameter(BuiltInParameter.FAMILY_HEIGHT_PARAM)
+                
+                if width is None and width_param_instance and width_param_instance.HasValue:
+                    width = width_param_instance.AsDouble()
+                    source_info["width"] = "instance_famille"
+                if height is None and height_param_instance and height_param_instance.HasValue:
+                    height = height_param_instance.AsDouble()
+                    source_info["height"] = "instance_famille"
+            
+            # Vérifier si les dimensions sont dans des unités internes (pieds) ou du projet (mètres)
+            # Généralement, les paramètres stockés sont en unités internes (pieds)
+            if width and width > 10:  # Si plus de 10, probablement en pieds
+                width = convert_internal_to_project_units(width)
+            if height and height > 10:  # Si plus de 10, probablement en pieds
+                height = convert_internal_to_project_units(height)
+        
+        # Si toujours pas de valeurs valides, essayer la boîte englobante
+        if width is None or height is None:
+            bb = fi.get_BoundingBox(None)
+            if bb is not None:
+                if width is None:
+                    width = convert_internal_to_project_units(bb.Max.X - bb.Min.X)
+                    source_info["width"] = "boîte_englobante"
+                if height is None:
+                    height = convert_internal_to_project_units(bb.Max.Z - bb.Min.Z)
+                    source_info["height"] = "boîte_englobante"
+        
+        # Vérifier encore si les dimensions sont raisonnables
+        if width and width < 0.1:  # Si moins de 10 cm, augmenter
+            width = 0.8  # Valeur par défaut
+        if height and height < 0.1:  # Si moins de 10 cm, augmenter
+            height = 2.0  # Valeur par défaut
+        
+        # Logs pour le débogage
+        print(f"Dimensions finales pour {fi.Id}: Largeur={width}m (source: {source_info.get('width', 'inconnue')}), " + 
+              f"Hauteur={height}m (source: {source_info.get('height', 'inconnue')})")
+        
+        return {
+            "width": width,
+            "height": height,
+            "source_info": source_info
+        }
+    except Exception as e:
+        print(f"Erreur lors de l'obtention des dimensions pour {fi.Id}: {str(e)}")
+        return {}
+
+def get_wall_opening_dimensions(fi, host):
+    """
+    Calcule les dimensions précises de l'ouverture dans le mur
+    """
+    try:
+        # Obtenir les dimensions de l'élément
+        element_dims = get_element_dimensions(fi)
+        
+        # Obtenir la normale du mur
+        wall_normal = host.Orientation
+        
+        # Obtenir la localisation de l'élément
+        location = fi.Location
+        if not isinstance(location, LocationPoint):
+            return None
+            
+        # Point d'insertion
+        element_position = location.Point
+        
+        # Vérifier si l'élément est perpendiculaire au mur
+        face_orientation = fi.FacingOrientation
+        dot_product = abs(wall_normal.DotProduct(face_orientation))
+        
+        # Si le produit scalaire est proche de 1, les vecteurs sont parallèles/antiparallèles
+        is_parallel = dot_product > 0.9
+        
+        # Ajuster la largeur et la hauteur selon l'orientation
+        width = element_dims.get("width", 0)
+        height = element_dims.get("height", 0)
+        
+        # Obtenir le solide pour vérifier les dimensions
+        solid = get_demolished_solid(fi)
+        if solid:
+            bb = solid.GetBoundingBox()
+            solid_width = convert_internal_to_project_units(bb.Max.X - bb.Min.X)
+            solid_height = convert_internal_to_project_units(bb.Max.Z - bb.Min.Z)
+            solid_depth = convert_internal_to_project_units(bb.Max.Y - bb.Min.Y)
+            
+            print(f"Comparaison des dimensions: Paramètres (L={width}m, H={height}m) vs " + 
+                  f"Solide (L={solid_width}m, H={solid_height}m, P={solid_depth}m)")
+            
+            # Utiliser les dimensions du solide si elles sont significativement différentes
+            # et semblent plus réalistes
+            if solid_width > 0.1 and abs(solid_width - width) > 0.5:
+                # Déterminer quelle dimension du solide utiliser (largeur ou profondeur)
+                # Utiliser la dimension qui est la plus proche de la largeur du paramètre
+                if abs(solid_depth - width) < abs(solid_width - width):
+                    width = solid_depth
+                else:
+                    width = solid_width
+                print(f"Utilisation de la largeur du solide: {width}m")
+            
+            if solid_height > 0.1 and abs(solid_height - height) > 0.5:
+                height = solid_height
+                print(f"Utilisation de la hauteur du solide: {height}m")
+        
+        # Obtenir l'emplacement bas de l'élément (niveau)
+        level_param = fi.get_Parameter(BuiltInParameter.INSTANCE_REFERENCE_LEVEL_PARAM)
+        level_id = level_param.AsElementId() if level_param else None
+        level = doc.GetElement(level_id) if level_id and level_id.IntegerValue != -1 else None
+        
+        # Obtenir l'élévation du niveau et l'élévation de l'élément par rapport au niveau
+        base_elevation = 0
+        if level:
+            base_elevation = level.Elevation
+        
+        offset_param = fi.get_Parameter(BuiltInParameter.INSTANCE_ELEVATION_PARAM)
+        offset = offset_param.AsDouble() if offset_param and offset_param.HasValue else 0
+        
+        # Imprimer des informations détaillées sur l'élévation
+        print(f"Élévation du niveau: {convert_internal_to_project_units(base_elevation)}m, " + 
+              f"Décalage: {convert_internal_to_project_units(offset)}m")
+        
+        # Élévation absolue du bas de l'élément
+        base_z = base_elevation + offset
+        
+        # Obtenir les coordonnées Z de l'élément pour vérification
+        element_z = element_position.Z
+        
+        print(f"Comparaison élévation: base_z calculée={convert_internal_to_project_units(base_z)}m, " + 
+              f"position Z de l'élément={convert_internal_to_project_units(element_z)}m")
+        
+        # Si l'élévation Z de l'élément est très différente, utiliser celle-ci comme référence
+        if abs(element_z - base_z) > 1:  # Si différence de plus de 1 pied
+            print(f"Utilisation de la position Z de l'élément comme base: {convert_internal_to_project_units(element_z)}m")
+            # Essayer de calculer un décalage pour le bas de l'ouverture
+            base_z = element_z - convert_project_to_internal_units(height/2)
+        
+        print(f"Dimensions finales calculées: largeur={width}m, hauteur={height}m, " + 
+              f"base_z={convert_internal_to_project_units(base_z)}m")
+        
+        return {
+            "width": width,
+            "height": height,
+            "position": element_position,
+            "base_z": base_z
+        }
+    except Exception as e:
+        print(f"Erreur lors du calcul des dimensions d'ouverture pour {fi.Id}: {str(e)}")
+        return None
+
+def create_precise_wall_opening(fi, host, dimensions):
+    """
+    Crée une ouverture précise dans le mur
+    """
+    try:
+        # Démarrer une transaction
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        
+        # Obtenir les informations nécessaires
+        position = dimensions.get("position")
+        width = dimensions.get("width", 0)
+        height = dimensions.get("height", 0)
+        base_z = dimensions.get("base_z", 0)  # déjà en unités internes (pieds)
+        
+        if position is None or width <= 0 or height <= 0:
+            print(f"Dimensions invalides pour {fi.Id}")
+            TransactionManager.Instance.TransactionTaskDone()
+            return None
+        
+        # Convertir les dimensions de mètres (projet) à pieds (interne)
+        width_feet = convert_project_to_internal_units(width)
+        height_feet = convert_project_to_internal_units(height)
+        
+        print(f"Création d'ouverture avec: position={position.X},{position.Y},{position.Z}, " + 
+              f"largeur={width}m, hauteur={height}m, base_z={convert_internal_to_project_units(base_z)}m")
+        
+        # Obtenir la normale du mur et son épaisseur
+        wall_normal = host.Orientation
+        wall_width = host.Width  # en unités internes (pieds)
+        
+        print(f"Normale du mur: {wall_normal.X},{wall_normal.Y},{wall_normal.Z}, " + 
+              f"Épaisseur: {convert_internal_to_project_units(wall_width)}m")
+        
+        # Créer un vecteur perpendiculaire à la normale du mur pour la largeur
+        right_vector = XYZ(-wall_normal.Y, wall_normal.X, 0).Normalize()
+        print(f"Vecteur perpendiculaire: {right_vector.X},{right_vector.Y},{right_vector.Z}")
+        
+        # Utiliser la position X,Y de l'élément mais ajuster Z pour être au niveau de la base
+        # Ceci est critique pour s'assurer que l'ouverture est bien dans le mur
+        position_xy = XYZ(position.X, position.Y, base_z)
+        
+        # Calculer les points min et max pour l'ouverture
+        half_width = width_feet / 2
+        
+        min_point = XYZ(
+            position_xy.X - right_vector.X * half_width,
+            position_xy.Y - right_vector.Y * half_width,
+            position_xy.Z
+        )
+        
+        max_point = XYZ(
+            position_xy.X + right_vector.X * half_width,
+            position_xy.Y + right_vector.Y * half_width,
+            position_xy.Z + height_feet
+        )
+        
+        # Ajuster la profondeur pour s'assurer que l'ouverture traverse le mur
+        depth_factor = 1.2  # Facteur pour assurer que l'ouverture traverse complètement
+        depth_vector = wall_normal.Multiply(wall_width * depth_factor / 2)
+        
+        min_point = min_point.Subtract(depth_vector)
+        max_point = max_point.Add(depth_vector)
+        
+        print(f"Points calculés: Min={min_point.X},{min_point.Y},{min_point.Z} Max={max_point.X},{max_point.Y},{max_point.Z}")
+        
+        # Créer l'ouverture
+        try:
+            opening = doc.Create.NewOpening(host, min_point, max_point)
+            print(f"Ouverture de mur créée pour {fi.Id}")
+            
+            # Terminer la transaction
+            TransactionManager.Instance.TransactionTaskDone()
+            return opening
+        except Exception as e:
+            print(f"Erreur lors de la création de l'ouverture: {str(e)}")
+            try:
+                # Essayer avec des points légèrement différents si la première tentative échoue
+                depth_factor = 1.5  # Augmenter le facteur de profondeur
+                depth_vector = wall_normal.Multiply(wall_width * depth_factor / 2)
+                
+                min_point = XYZ(
+                    position_xy.X - right_vector.X * half_width,
+                    position_xy.Y - right_vector.Y * half_width,
+                    position_xy.Z
+                ).Subtract(depth_vector)
+                
+                max_point = XYZ(
+                    position_xy.X + right_vector.X * half_width,
+                    position_xy.Y + right_vector.Y * half_width,
+                    position_xy.Z + height_feet
+                ).Add(depth_vector)
+                
+                print(f"Nouvelle tentative avec points: Min={min_point.X},{min_point.Y},{min_point.Z} Max={max_point.X},{max_point.Y},{max_point.Z}")
+                
+                opening = doc.Create.NewOpening(host, min_point, max_point)
+                print(f"Ouverture de mur créée (2ème tentative) pour {fi.Id}")
+                
+                TransactionManager.Instance.TransactionTaskDone()
+                return opening
+            except Exception as e2:
+                print(f"Échec de la deuxième tentative: {str(e2)}")
+                TransactionManager.Instance.TransactionTaskDone()
+                return None
+        
+    except Exception as e:
+        print(f"Erreur dans create_precise_wall_opening pour {fi.Id}: {str(e)}")
+        try:
+            TransactionManager.Instance.TransactionTaskDone()
+        except:
+            pass
+        return None
+
+def create_roof_opening(fi, host, dimensions=None):
+    """
+    Crée une ouverture dans un toit
+    """
+    try:
+        # Démarrer une transaction
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        
+        # Si nous n'avons pas les dimensions, essayer de les obtenir
+        if dimensions is None:
+            # Obtenir les dimensions à partir des paramètres
+            element_dims = get_element_dimensions(fi)
+            width = element_dims.get("width", 0)
+            height = element_dims.get("height", 0)
+            
+            # Obtenir la position à partir de l'élément
+            position = fi.Location.Point if isinstance(fi.Location, LocationPoint) else None
+            
+            if position is None or width <= 0 or height <= 0:
+                print(f"Dimensions ou position invalides pour {fi.Id}")
+                TransactionManager.Instance.TransactionTaskDone()
+                return None
+                
+            dimensions = {
+                "width": width,
+                "height": height,
+                "position": position
+            }
+        
+        # Obtenir les informations nécessaires
+        position = dimensions.get("position")
+        width = dimensions.get("width", 0)
+        height = dimensions.get("height", 0)
+        
+        # Convertir les dimensions de mètres à pieds pour Revit
+        width_feet = convert_project_to_internal_units(width)
+        height_feet = convert_project_to_internal_units(height)
+        
+        print(f"Création d'ouverture de toit avec: largeur={width}m, hauteur={height}m")
+        
+        # Obtenir la direction de la fenêtre
+        face_orientation = fi.FacingOrientation
+        
+        # Créer un vecteur perpendiculaire à l'orientation pour la largeur
+        up_vector = XYZ(0, 0, 1)
+        right_vector = face_orientation.CrossProduct(up_vector).Normalize()
+        
+        # Si le vecteur est nul (orientation verticale), utiliser une direction par défaut
+        if right_vector.GetLength() < 0.1:
+            right_vector = XYZ(1, 0, 0)
+        
+        # Créer un CurveArray pour définir le contour de l'ouverture
+        curve_array = CurveArray()
+        
+        # Calculer les points du rectangle pour l'ouverture
+        # Utiliser la moitié de la largeur et hauteur pour centrer autour de la position
+        half_width = width_feet / 2
+        half_height = height_feet / 2
+        
+        # Calculer les points du rectangle (ajuster selon l'orientation de la fenêtre)
+        pt1 = position.Add(right_vector.Multiply(-half_width)).Add(face_orientation.Multiply(-half_height))
+        pt2 = position.Add(right_vector.Multiply(half_width)).Add(face_orientation.Multiply(-half_height))
+        pt3 = position.Add(right_vector.Multiply(half_width)).Add(face_orientation.Multiply(half_height))
+        pt4 = position.Add(right_vector.Multiply(-half_width)).Add(face_orientation.Multiply(half_height))
+        
+        # Ajouter les lignes au CurveArray
+        curve_array.Append(Line.CreateBound(pt1, pt2))
+        curve_array.Append(Line.CreateBound(pt2, pt3))
+        curve_array.Append(Line.CreateBound(pt3, pt4))
+        curve_array.Append(Line.CreateBound(pt4, pt1))
+        
+        print(f"Points de l'ouverture du toit: {pt1.X},{pt1.Y},{pt1.Z} - {pt2.X},{pt2.Y},{pt2.Z} - {pt3.X},{pt3.Y},{pt3.Z} - {pt4.X},{pt4.Y},{pt4.Z}")
+        
+        # Créer l'ouverture dans le toit
+        try:
+            opening = doc.Create.NewOpening(host, curve_array, True)
+            print(f"Ouverture de toit créée pour {fi.Id}")
+            
+            # Terminer la transaction
+            TransactionManager.Instance.TransactionTaskDone()
+            return opening
+        except Exception as e:
+            print(f"Erreur lors de la création de l'ouverture de toit: {str(e)}")
+            TransactionManager.Instance.TransactionTaskDone()
+            return None
+        
+    except Exception as e:
+        print(f"Erreur globale dans create_roof_opening pour {fi.Id}: {str(e)}")
+        try:
+            TransactionManager.Instance.TransactionTaskDone()
+        except:
+            pass
+        return None
+
+# Fonction pour obtenir toutes les portes et fenêtres
+def get_all_doors_and_windows():
+    try:
+        # Créer des collecteurs pour portes et fenêtres
+        door_collector = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Doors).WhereElementIsNotElementType()
+        window_collector = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Windows).WhereElementIsNotElementType()
+        
+        # Combiner les résultats
+        all_elements = list(door_collector) + list(window_collector)
+        
+        # Filtrer pour ne garder que les FamilyInstance
+        family_instances = [elem for elem in all_elements if isinstance(elem, FamilyInstance)]
+        
+        print(f"Nombre d'éléments trouvés: {len(family_instances)}")
+        return family_instances
+    except Exception as e:
+        print(f"Erreur lors de la collecte des portes et fenêtres: {str(e)}")
+        return []
+
+# Fonction principale pour traiter tous les éléments
+def process_all_elements():
+    # Obtenir toutes les portes et fenêtres
+    elements = get_all_doors_and_windows()
+    results = []
+    
+    for element in elements:
+        try:
+            # Obtenir l'hôte
+            host = element.Host
+            if host is None:
+                print(f"Pas d'hôte trouvé pour {element.Id}")
+                continue
+                
+            print(f"Traitement de l'élément: {element.Id}, Hôte: {host.Id}")
+            
+            # Traiter selon le type d'hôte
+            if isinstance(host, Wall):
+                # Calculer les dimensions précises de l'ouverture
+                dimensions = get_wall_opening_dimensions(element, host)
+                
+                if dimensions:
+                    # Créer l'ouverture avec des dimensions précises
+                    opening = create_precise_wall_opening(element, host, dimensions)
+                    results.append((element, opening))
+                    if opening:
+                        print(f"Ouverture créée avec succès pour {element.Id}")
+                    else:
+                        print(f"Échec de création d'ouverture pour {element.Id}")
+                else:
+                    print(f"Impossible de calculer les dimensions pour {element.Id}")
+            elif isinstance(host, RoofBase) or isinstance(host, FootPrintRoof):
+                # Pour les fenêtres de toit, utiliser la méthode spécifique
+                dimensions = get_element_dimensions(element)
+                opening = create_roof_opening(element, host, dimensions)
+                results.append((element, opening))
+                if opening:
+                    print(f"Ouverture de toit créée avec succès pour {element.Id}")
+                else:
+                    print(f"Échec de création d'ouverture de toit pour {element.Id}")
+            else:
+                print(f"Type d'hôte non pris en charge pour l'instant: {type(host).__name__}")
+        
+        except Exception as e:
+            print(f"Erreur lors du traitement de l'élément {element.Id}: {str(e)}")
+    
+    return results
+
+# Test avec le premier élément pour le débogage ou traiter tous les éléments
+debug_mode = False  # Mettre à True pour tester avec seulement le premier élément
+
+if debug_mode:
+    # Obtenir toutes les portes et fenêtres
+    doors_and_windows = get_all_doors_and_windows()
+    
+    # Test avec le premier élément pour le débogage
+    if doors_and_windows and len(doors_and_windows) > 0:
+        try:
+            test_element = doors_and_windows[0]
+            print(f"Test avec l'élément: {test_element.Id}")
+            
+            # Obtenir l'hôte
+            host = test_element.Host
+            print(f"Hôte trouvé: {host.Id}, Type: {type(host).__name__}")
+            
+            if isinstance(host, Wall):
+                # Calculer les dimensions précises
+                dimensions = get_wall_opening_dimensions(test_element, host)
+                
+                # Créer l'ouverture si les dimensions sont valides
+                opening = None
+                if dimensions:
+                    opening = create_precise_wall_opening(test_element, host, dimensions)
+                    
+                # Sortie: dimensions et ouverture
+                OUT = (dimensions, opening)
+            elif isinstance(host, RoofBase) or isinstance(host, FootPrintRoof):
+                # Pour les fenêtres de toit
+                dimensions = get_element_dimensions(test_element)
+                opening = create_roof_opening(test_element, host, dimensions)
+                OUT = (dimensions, opening)
+            else:
+                print(f"Type d'hôte non pris en charge pour le débogage: {type(host).__name__}")
+                OUT = None
+        except Exception as e:
+            print(f"Erreur lors du test avec le premier élément: {str(e)}")
+            OUT = None
+    else:
+        print("Aucune porte ou fenêtre trouvée dans le projet")
+        OUT = None
+else:
+    # Traiter tous les éléments
+    results = process_all_elements()
+    OUT = results
