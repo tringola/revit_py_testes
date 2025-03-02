@@ -1,0 +1,168 @@
+'''
+Python Templates - Revit Basic Imports
+'''
+__author__ = 'Da Rosa Freire'
+__version__ = '0.1.0'
+
+import clr
+# import System
+import System
+from System.Collections.Generic import *
+import csv
+import json
+import os
+
+# Import ToDSType(bool) extension method
+clr.AddReference("RevitNodes")
+import Revit
+clr.ImportExtensions(Revit.Elements)
+
+# Import geometry conversion extension methods
+clr.ImportExtensions(Revit.GeometryConversion)
+
+# Import DocumentManager and TransactionManager
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+
+# Import RevitAPI
+clr.AddReference("RevitAPI")
+import Autodesk
+from Autodesk.Revit.DB import *
+
+# import Revit API User Interface UI
+clr.AddReference('RevitAPIUI')
+from Autodesk.Revit.UI import *
+from Autodesk.Revit import Creation
+
+# Imports Ilists module into python
+clr.AddReference("System")
+
+# Standard areas for Current Document, Active UI and application
+doc = DocumentManager.Instance.CurrentDBDocument
+uiapp = DocumentManager.Instance.CurrentUIApplication
+app = uiapp.Application
+uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
+
+#path is r"X:\dir\etc..."
+def require_once(path):
+    sys.path.append(os.path.abspath(path))
+
+
+def get_demolished_solid(fi):
+    """
+    Si vous démolissez une porte, Revit remplira automatiquement
+    l'ouverture avec un mur. Nous utiliserons ce mur pour obtenir
+    les dimensions de l'ouverture.
+    
+    Paramètres:
+    fi: Une instance de famille (porte ou fenêtre attendue)
+    
+    Retourne:
+    Un solid représentant l'ouverture ou None si échec
+    """
+    solid_opening = None
+    
+    try:
+        # Démarrer une transaction
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        
+        # Vérifier si l'élément a des phases et si elles sont modifiables
+        if fi.HasPhases() and fi.ArePhasesModifiable():
+            # Modifier la phase de démolition
+            fi.DemolishedPhaseId = fi.CreatedPhaseId
+            doc.Regenerate()
+            
+            # Obtenir les éléments dépendants
+            dependents = fi.GetDependentElements(None)
+            
+            # Parcourir les éléments dépendants
+            for id in dependents:
+                e = doc.GetElement(id)
+                if isinstance(e, Wall):
+                    # Obtenir la géométrie du mur
+                    geom_wall = e.get_Geometry(Options())
+                    
+                    # Cloner le solide
+                    for geom in geom_wall:
+                        if isinstance(geom, Solid) and geom.Volume > 0:
+                            solid_opening = SolidUtils.Clone(geom)
+                            break
+                    break
+            
+            # Restaurer l'état original
+            fi.DemolishedPhaseId = ElementId.InvalidElementId
+            doc.Regenerate()
+        
+        # Terminer la transaction
+        TransactionManager.Instance.TransactionTaskDone()
+        
+        # Transformer le solide dans les coordonnées de la famille
+        if solid_opening is not None and solid_opening.Volume > 0:
+            try:
+                # Vérifier que la transformation est valide
+                transform = fi.GetTotalTransform()
+                if transform and not transform.IsIdentity:
+                    solid_in_family_coordinates = SolidUtils.CreateTransformed(
+                        solid_opening, transform.Inverse
+                    )
+                    
+                    bb = solid_in_family_coordinates.GetBoundingBox()
+                    
+                    # Vérifier que la boîte englobante est valide
+                    if bb and bb.Min and bb.Max:
+                        # Calculer les dimensions comme des coordonnées individuelles
+                        dim_x = bb.Max.X - bb.Min.X
+                        dim_y = bb.Max.Y - bb.Min.Y
+                        dim_z = bb.Max.Z - bb.Min.Z
+                        
+                        print(f"Élément: {fi.Id} - Ouverture: {dim_x:.2f} x {dim_z:.2f}")
+            except Exception as e:
+                print(f"Erreur lors du calcul des dimensions pour {fi.Id}: {str(e)}")
+    
+    except Exception as e:
+        print(f"Erreur dans get_demolished_solid pour {fi.Id}: {str(e)}")
+        # Assurer que la transaction est terminée en cas d'erreur
+        try:
+            TransactionManager.Instance.TransactionTaskDone()
+        except:
+            pass
+    
+    return solid_opening
+
+# Fonction pour obtenir toutes les portes et fenêtres
+def get_all_doors_and_windows():
+    try:
+        # Créer des collecteurs pour portes et fenêtres
+        door_collector = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Doors).WhereElementIsNotElementType()
+        window_collector = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Windows).WhereElementIsNotElementType()
+        
+        # Combiner les résultats
+        all_elements = list(door_collector) + list(window_collector)
+        
+        # Filtrer pour ne garder que les FamilyInstance
+        family_instances = [elem for elem in all_elements if isinstance(elem, FamilyInstance)]
+        
+        print(f"Nombre d'éléments trouvés: {len(family_instances)}")
+        return family_instances
+    except Exception as e:
+        print(f"Erreur lors de la collecte des portes et fenêtres: {str(e)}")
+        return []
+
+# Obtenir toutes les portes et fenêtres
+doors_and_windows = get_all_doors_and_windows()
+
+# Tester avec juste le premier élément pour le débogage
+if doors_and_windows and len(doors_and_windows) > 0:
+    try:
+        test_element = doors_and_windows[0]
+        print(f"Test avec l'élément: {test_element.Id}")
+        result = get_demolished_solid(test_element)
+        OUT = result
+    except Exception as e:
+        print(f"Erreur lors du test avec le premier élément: {str(e)}")
+        OUT = None
+else:
+    print("Aucune porte ou fenêtre trouvée dans le projet")
+    OUT = None
