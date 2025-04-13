@@ -1,3 +1,18 @@
+import sys
+import clr
+
+# Ajout du chemin vers les DLL Revit (ajustez le chemin selon votre version)
+revit_path = r"C:\Program Files\Autodesk\Revit 2024"
+sys.path.append(revit_path)
+
+# Référencement des DLL nécessaires
+clr.AddReference("RevitAPI")
+clr.AddReference("RevitAPIUI")
+
+# Import des namespaces
+from Autodesk.Revit.DB import *
+from Autodesk.Revit.UI import *
+
 def get_wall_subtypes(doc, family_name=None):
     """
     Récupère tous les sous-types de mur d'une famille spécifique
